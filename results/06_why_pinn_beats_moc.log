@@ -1,0 +1,71 @@
+Using backend: pytorch
+Other supported backends: tensorflow.compat.v1, tensorflow, jax, paddle.
+paddle supports more examples now and is recommended.
+Set the default float type to float64
+true wave speed   = 1388.3 m/s
+wrong assumption  = 1150.0 m/s  (-17.2% off)
+naive blind MOC (wrong a, never sees sensor data): Q RMSE = 0.046 L/s
+Compiling model...
+'compile' took 9.159569 s
+
+Training model...
+
+Step      Train loss                                            Test loss                                             Test metric
+0         [1.45e+03, 2.04e+03, 8.10e+01, 2.39e+00, 8.30e+01]    [1.45e+03, 2.04e+03, 8.10e+01, 2.39e+00, 8.30e+01]    []  
+500       [2.03e+00, 2.68e+00, 2.80e+00, 2.21e+00, 3.66e+00]    [3.63e+00, 5.38e+00, 2.80e+00, 2.21e+00, 3.66e+00]    []  
+800       [1.76e+00, 1.95e+00, 1.82e+00, 2.07e+00, 2.00e+00]    [2.84e+00, 3.36e+00, 1.82e+00, 2.07e+00, 2.00e+00]    []  
+
+Best model at step 800:
+  train loss: 9.61e+00
+  test loss: 1.21e+01
+  test metric: []
+
+'train' took 78.332608 s
+
+Compiling model...
+'compile' took 0.000237 s
+
+Training model...
+
+Step      Train loss                                            Test loss                                             Test metric
+800       [1.76e+00, 1.95e+00, 1.82e+00, 2.07e+00, 2.00e+00]    [2.84e+00, 3.36e+00, 1.82e+00, 2.07e+00, 2.00e+00]    []  
+1000      [1.59e+00, 1.10e+00, 1.03e+00, 1.84e+00, 9.85e-01]    [2.00e+00, 1.93e+00, 1.03e+00, 1.84e+00, 9.85e-01]    []  
+1500      [8.14e-01, 4.08e-01, 2.22e-01, 9.49e-01, 1.51e-01]    [1.32e+00, 6.89e-01, 2.22e-01, 9.49e-01, 1.51e-01]    []  
+2000      [2.84e-01, 2.00e-01, 6.55e-02, 4.50e-01, 6.05e-02]    [5.02e-01, 3.59e-01, 6.55e-02, 4.50e-01, 6.05e-02]    []  
+2500      [1.67e-01, 1.22e-01, 2.33e-02, 2.15e-01, 2.15e-02]    [3.73e-01, 3.22e-01, 2.33e-02, 2.15e-01, 2.15e-02]    []  
+3000      [7.19e-02, 6.16e-02, 1.21e-02, 1.42e-01, 1.19e-02]    [2.13e-01, 2.01e-01, 1.21e-02, 1.42e-01, 1.19e-02]    []  
+3500      [4.84e-02, 4.75e-02, 7.26e-03, 1.07e-01, 9.11e-03]    [2.01e-01, 1.75e-01, 7.26e-03, 1.07e-01, 9.11e-03]    []  
+4000      [3.99e-02, 4.27e-02, 6.11e-03, 8.01e-02, 8.40e-03]    [1.65e-01, 1.56e-01, 6.11e-03, 8.01e-02, 8.40e-03]    []  
+4300      [3.67e-02, 3.92e-02, 4.90e-03, 6.63e-02, 7.65e-03]    [1.45e-01, 1.56e-01, 4.90e-03, 6.63e-02, 7.65e-03]    []  
+
+Best model at step 4300:
+  train loss: 1.55e-01
+  test loss: 3.80e-01
+  test metric: []
+
+'train' took 317.910009 s
+
+Compiling model...
+'compile' took 0.000305 s
+
+Training model...
+
+Step      Train loss                                            Test loss                                             Test metric
+4300      [3.67e-02, 3.92e-02, 4.90e-03, 6.63e-02, 7.65e-03]    [1.45e-01, 1.56e-01, 4.90e-03, 6.63e-02, 7.65e-03]    []  
+5300      [3.24e-03, 3.26e-03, 3.38e-04, 5.35e-03, 4.71e-03]    [4.99e-02, 1.15e-01, 3.38e-04, 5.35e-03, 4.71e-03]    []  
+6300      [1.11e-03, 1.01e-03, 1.47e-04, 4.65e-03, 4.52e-03]    [2.74e-02, 7.67e-02, 1.47e-04, 4.65e-03, 4.52e-03]    []  
+
+Best model at step 6300:
+  train loss: 1.14e-02
+  test loss: 1.13e-01
+  test metric: []
+
+'train' took 194.822365 s
+
+PINN trained in 600.4364719390869 s
+PINN's corrected wave speed = 1383.4 m/s  (started from 1150.0, true is 1388.3)
+PINN (corrected via sensor data): Q RMSE = 0.001 L/s
+
+--> PINN is 39.9x more accurate than blind MOC, despite starting from the SAME wrong wave-speed assumption.
+saved results/06_why_pinn_beats_moc.png
+DONE

@@ -1,0 +1,8 @@
+torch>=2.1
+deepxde>=1.11
+numpy
+scipy
+matplotlib
+onnx
+onnxruntime
+onnxscript

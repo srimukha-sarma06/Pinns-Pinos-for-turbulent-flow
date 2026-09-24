@@ -1,0 +1,50 @@
+Using backend: pytorch
+Other supported backends: tensorflow.compat.v1, tensorflow, jax, paddle.
+paddle supports more examples now and is recommended.
+Set the default float type to float64
+Compiling model...
+'compile' took 10.332288 s
+
+Training model...
+
+Step      Train loss                                            Test loss                                             Test metric
+0         [2.03e+03, 2.13e+03, 1.35e+02, 2.25e+00, 1.02e+02]    [2.03e+03, 2.13e+03, 1.35e+02, 2.25e+00, 1.02e+02]    []  
+500       [1.97e+00, 2.84e+00, 3.56e+00, 1.99e+00, 3.03e+00]    [3.87e+00, 5.64e+00, 3.56e+00, 1.99e+00, 3.03e+00]    []  
+1000      [1.23e+00, 1.49e+00, 1.70e+00, 1.78e+00, 1.11e+00]    [2.52e+00, 2.96e+00, 1.70e+00, 1.78e+00, 1.11e+00]    []  
+1500      [9.95e-01, 1.00e+00, 9.60e-01, 1.56e+00, 5.12e-01]    [2.26e+00, 2.14e+00, 9.60e-01, 1.56e+00, 5.12e-01]    []  
+2000      [9.81e-01, 7.42e-01, 5.77e-01, 1.26e+00, 2.33e-01]    [2.11e+00, 1.89e+00, 5.77e-01, 1.26e+00, 2.33e-01]    []  
+2500      [9.00e-01, 6.07e-01, 4.49e-01, 1.10e+00, 1.59e-01]    [1.99e+00, 1.49e+00, 4.49e-01, 1.10e+00, 1.59e-01]    []  
+3000      [8.11e-01, 4.81e-01, 3.47e-01, 9.12e-01, 1.09e-01]    [1.75e+00, 1.16e+00, 3.47e-01, 9.12e-01, 1.09e-01]    []  
+
+Best model at step 3000:
+  train loss: 2.66e+00
+  test loss: 4.28e+00
+  test metric: []
+
+'train' took 318.346526 s
+
+Compiling model...
+'compile' took 0.000195 s
+
+Training model...
+
+Step      Train loss                                            Test loss                                             Test metric
+3000      [9.59e-01, 6.29e-01, 3.47e-01, 9.12e-01, 1.09e-01]    [1.75e+00, 1.16e+00, 3.47e-01, 9.12e-01, 1.09e-01]    []  
+4000      [2.78e-03, 2.32e-03, 3.80e-04, 6.26e-03, 5.29e-03]    [4.93e-02, 6.57e-02, 3.80e-04, 6.26e-03, 5.29e-03]    []  
+
+Best model at step 4000:
+  train loss: 1.70e-02
+  test loss: 1.27e-01
+  test metric: []
+
+'train' took 119.888333 s
+
+field errors (leak params given, network only): {
+  "H_nrmse": 0.00679372568016275,
+  "Q_nrmse": 0.022751601035529364,
+  "Q_rmse_Ls": 0.008631490268845982,
+  "Q_rel_err_pct": 0.4239843585762647,
+  "Q_mid_peak_err_Ls": 0.0006980608690345703,
+  "H_sensor_rmse_m": 0.043615995831201314
+}
+DONE

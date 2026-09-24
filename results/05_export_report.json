@@ -1,0 +1,16 @@
+{
+  "onnx_path": "results/05_pinn_forward_fp32.onnx",
+  "n_params": 2274,
+  "max_pytorch_onnx_diff": 3.5230655227314056e-06,
+  "ops_used": [
+    "Concat",
+    "Div",
+    "Gemm",
+    "Mul",
+    "Slice",
+    "Sub",
+    "Tanh"
+  ],
+  "unsupported_ops": [],
+  "onnx_file_bytes": 4356
+}

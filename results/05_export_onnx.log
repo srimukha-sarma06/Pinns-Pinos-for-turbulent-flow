@@ -1,0 +1,79 @@
+Using backend: pytorch
+Other supported backends: tensorflow.compat.v1, tensorflow, jax, paddle.
+paddle supports more examples now and is recommended.
+Set the default float type to float64
+Compiling model...
+'compile' took 7.856226 s
+
+Training model...
+
+Step      Train loss                                            Test loss                                             Test metric
+0         [4.24e+00, 1.64e+01, 3.50e+01, 2.73e+00, 9.91e+01]    [4.24e+00, 1.64e+01, 3.50e+01, 2.73e+00, 9.91e+01]    []  
+500       [9.45e-01, 1.65e-01, 1.31e+00, 1.74e+00, 1.96e+00]    [1.48e+00, 2.43e-01, 1.31e+00, 1.74e+00, 1.96e+00]    []  
+1000      [8.34e-01, 2.49e-01, 5.08e-01, 1.58e+00, 1.00e+00]    [1.29e+00, 4.71e-01, 5.08e-01, 1.58e+00, 1.00e+00]    []  
+1500      [4.11e-01, 1.68e-01, 2.24e-01, 1.29e+00, 3.98e-01]    [7.65e-01, 3.18e-01, 2.24e-01, 1.29e+00, 3.98e-01]    []  
+2000      [2.55e-01, 1.17e-01, 9.92e-02, 9.42e-01, 1.44e-01]    [5.34e-01, 2.56e-01, 9.92e-02, 9.42e-01, 1.44e-01]    []  
+2500      [2.00e-01, 9.95e-02, 7.25e-02, 7.85e-01, 9.13e-02]    [4.54e-01, 2.46e-01, 7.25e-02, 7.85e-01, 9.13e-02]    []  
+3000      [2.04e-01, 9.58e-02, 5.43e-02, 6.23e-01, 5.94e-02]    [3.42e-01, 2.07e-01, 5.43e-02, 6.23e-01, 5.94e-02]    []  
+
+Best model at step 3000:
+  train loss: 1.04e+00
+  test loss: 1.29e+00
+  test metric: []
+
+'train' took 101.605226 s
+
+Compiling model...
+'compile' took 0.000153 s
+
+Training model...
+
+Step      Train loss                                            Test loss                                             Test metric
+3000      [2.07e-01, 9.86e-02, 5.43e-02, 6.23e-01, 5.94e-02]    [3.42e-01, 2.07e-01, 5.43e-02, 6.23e-01, 5.94e-02]    []  
+4000      [7.26e-02, 8.38e-03, 3.33e-03, 2.73e-02, 8.49e-03]    [6.14e-02, 2.76e-02, 3.33e-03, 2.73e-02, 8.49e-03]    []  
+
+Best model at step 4000:
+  train loss: 1.20e-01
+  test loss: 1.28e-01
+  test metric: []
+
+'train' took 33.225773 s
+
+trained in 143.42586207389832 s
+network has 2274 parameters
+/home/claude/leakpinn/scripts/05_export_onnx.py:89: UserWarning: # 'dynamic_axes' is not recommended when dynamo=True, and may lead to 'torch._dynamo.exc.UserError: Constraints violated.' Supply the 'dynamic_shapes' argument instead if export is unsuccessful.
+  torch.onnx.export(
+W0924 09:50:24.922000 94 torch/onnx/_internal/exporter/_compat.py:133] Setting ONNX exporter to use operator set version 18 because the requested opset_version 17 is a lower version than we have implementations for. Automatic version conversion will be performed, which may not be successful at converting to the requested version. If version conversion is unsuccessful, the opset version of the exported model will be kept at 18. Please consider setting opset_version >=18 to leverage latest ONNX features
+W0924 09:50:25.618000 94 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::nms
+W0924 09:50:25.619000 94 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_align
+W0924 09:50:25.619000 94 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::roi_pool
+W0924 09:50:25.619000 94 torch/onnx/_internal/exporter/_registration.py:107] torchvision is not installed. Skipping torchvision::deform_conv2d
+[torch.onnx] Obtain model graph for `PINNNet([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `PINNNet([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decompositions...
+[torch.onnx] Run decompositions... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+The model version conversion is not supported by the onnxscript version converter and fallback is enabled. The model will be converted using the onnx C API (target version: 17).
+[torch.onnx] Optimize the ONNX graph...
+[torch.onnx] Optimize the ONNX graph... ✅
+exported to results/05_pinn_forward_fp32.onnx
+max |float64 PyTorch - float32 ONNX| = 3.523e-06
+  (measures export fidelity + the float64->float32 cast cost; compare to the physical
+   scale factors Hs=10 m and 1/B_nom~1.5e-5 m^3/s to judge whether it matters here)
+
+ONNX ops used by the exported graph: ['Concat', 'Div', 'Gemm', 'Mul', 'Slice', 'Sub', 'Tanh']
+All ops confirmed present in TFLM's kernel registry (CPU path, no NPU needed).
+
+saved results/05_export_report.json
+
+NEXT STEP (not run here -- needs a full TensorFlow install, which this script deliberately
+avoids to stay light): convert the ONNX file to TFLite for the RA8/FSP toolchain with:
+
+    pip install onnx2tf tensorflow
+    onnx2tf -i results/05_pinn_forward.onnx -o results/05_tflite_model/
+
+That produces a .tflite file you hand to Renesas FSP's TFLM integration. If you want, I can
+also run that conversion step for you next.
+
+DONE
