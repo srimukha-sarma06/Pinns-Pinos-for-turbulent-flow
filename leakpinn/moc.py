@@ -59,7 +59,10 @@ class MOC:
             H, Q, _ = march(Q1)
             return Q[N] - self.v.Cv * tau0 * np.sqrt(max(H[N], 0.0))
 
-        Q1 = brentq(resid, 1e-5, 5e-2, xtol=1e-14, rtol=1e-13)
+        # bracket scaled to this pipe's own design flow (not a fixed constant) so this solves
+        # correctly across pipes of very different size, not just the ~2 L/s default
+        qhi = max(5.0 * p.Q_design, 1e-3)
+        Q1 = brentq(resid, 1e-8, qhi, xtol=1e-14, rtol=1e-13)
         H, Q, Qup = march(Q1)
         return H, Q, Qup   # Q = flow on the downstream side of each node
 

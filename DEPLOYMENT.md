@@ -4,6 +4,16 @@ Everything the person deploying this needs to know, in one place. Written for th
 Ethos-U55 board, **NPU not used** — inference runs as plain TensorFlow Lite Micro (TFLM) on the
 Cortex-M CPU.
 
+**Two deployable forward models now exist — pick the one that matches your situation:**
+
+- **§1–§7 below**: the ORIGINAL model, trained on and valid for exactly ONE pipe (100 m, DN50
+  steel, leak at 37.25 m). Highest accuracy (0.4% flow error) but must be retrained and
+  re-exported for any different pipe.
+- **§8 (bottom of this file)**: the GENERALIZED model — one trained network, one `.tflite` file,
+  that works across a *range* of pipes (20–300 m, DN25–DN200, steel through HDPE) without
+  retraining, at the cost of noticeably lower accuracy (~15–20% field error vs. 0.4%). Use this
+  one if you need to cover more than one physical pipe with the same deployed model.
+
 ## 1. What you're actually deploying
 
 `results/05_pinn_forward_fp32.onnx` — a **forward** model: given a position and time along the
@@ -136,9 +146,10 @@ Baked into training, not configurable at inference time without retraining:
 - Wave speed ~1388 m/s (assumes steel pipe, no significant entrained air)
 
 If the real pipe differs from these (different material, diameter, leak size/location, or valve
-timing), **this exact model will give wrong answers** — it doesn't generalize. Retrain via
+timing), **this exact model will give wrong answers** — it doesn't generalize. Either retrain via
 `scripts/02_forward_pinn.py` / `05_export_onnx.py` with `leakpinn/physics.py`'s `Pipe`/`Valve`
-parameters updated to match the real hardware first.
+parameters updated to match the real hardware, or switch to the generalized model in §8 below if
+you need one deployed model to cover more than one physical pipe.
 
 ## 7. Who to ask if something breaks
 
@@ -148,3 +159,87 @@ here is verified as far as software-only checks can go (physics validation again
 water-hammer theory, numerical export equivalence, op-list matching against TFLM source). The
 gap between "should work" and "works on the board" is real and untested. Budget time for
 on-device debugging; don't treat this handoff as a guarantee.
+
+---
+
+## 8. The GENERALIZED model — one deployed model, a range of pipes
+
+### 8.1 What it is
+
+`results/09_general_forward_fp32.tflite` (78 KB, fp32, 16,194 parameters) — same kind of forward
+model as §1 (predicts head/flow given a known leak), but pipe geometry, wave speed, friction and
+leak position/size are **runtime inputs** instead of constants baked in at training time. Trained
+across randomly sampled pipes in the range documented in `README.md`'s "Generalized forward model"
+section (length 20–300 m, DN25–DN200, wave speed 300–1400 m/s, leak 0.5–10% of design flow, leak
+anywhere from 5–95% of the pipe). One `.tflite` file, no retraining, for any pipe in that range.
+
+Produced by, in order: `scripts/07_train_general_forward.py` (train + validate against MOC on
+held-out pipes) → `scripts/08_export_general_onnx.py` (ONNX export + TFLM op check) →
+`scripts/09_convert_tflite.py` (TFLite fp32 conversion + numerical verification).
+
+### 8.2 Input / output contract
+
+Input tensor `scenario_xy`, shape `[1, 10]`, **float32**. Every column is dimensionless and is
+computed from your pipe's raw physical parameters exactly the same way §1's `xi`/`tau` conversion
+already required — nothing here needs a special function beyond `sqrt`, all ordinary host-side
+arithmetic (see `leakpinn.general_pinn.scenario_consts`/`DeployNet` for the reference Python):
+
+| idx | name | formula |
+|---|---|---|
+| 0 | `xi` | `x_metres / L` |
+| 1 | `tau` | `a * t_seconds / L` |
+| 2 | `xiL` | `leak_x_metres / L` |
+| 3 | `kappa` | `B_nom * CdA * sqrt(2*9.80665)` |
+| 4 | `phi` | `f * L * 9.80665 / (2*D*a**2)` (`f` = Darcy friction factor at design flow, Swamee-Jain) |
+| 5 | `H1n` | reference head near the reservoir [m] / 100 |
+| 6 | `H2n` | reference head at the valve [m] / 100 |
+| 7 | `xi1` | reference-point position / `L` |
+| 8 | `B_nom` | `a / (9.80665 * A)`, `A` = pipe cross-section area |
+| 9 | `qv0` | `B_nom * Q_design` |
+
+Output tensor `H_Q`, shape `[1, 2]`, float32: `[H_metres, Q_m3_per_s]` — **already physical
+units**. Unlike §1's contract, there is **no separate host-side reconstruction formula to hand-code
+per pipe** (no `erf`, no manually-typed constants) — the steady-profile reconstruction is baked
+into the graph itself, because those constants are no longer fixed at export time. This is a
+deliberate simplification over §1's contract, not an oversight: with leak position/size varying at
+runtime, per-deployment hand-written reconstruction code would need updating for every pipe anyway.
+
+### 8.3 Ops used — confirmed supported, checked twice
+
+Same TFLM kernel registry as §2, checked at TWO levels (`scripts/08` checks the ONNX graph,
+`scripts/09` re-checks the actual compiled `.tflite`, since onnx2tf's own lowering can rewrite an
+op): `Gemm/MatMul → FULLY_CONNECTED` and (for the Fourier-feature matrix multiply specifically)
+`BATCH_MATMUL`, `Tanh`, `Sin`, `Cos`, `Mul`, `Sub`, `Add`, `Div`, `Sqrt`, `Log`, `Relu`, `Concat`,
+and `Slice`/`SPLIT` (repeated slices get fused into one `SPLIT` op by onnx2tf). All confirmed
+present in `tensorflow/lite/micro/kernels/micro_ops.h` — `Register_BATCH_MATMUL()` and
+`Register_SPLIT()` specifically re-checked against the live TFLM source for this model, not
+assumed. `Erf` and `Clip` (no native TFLM kernels) are never used — see `leakpinn/general_pinn.py`'s
+module docstring for the Tanh/Relu replacements and why they're needed here but weren't in §1.
+
+### 8.4 What's actually verified vs. what isn't
+
+| Claim | Status |
+|---|---|
+| ONNX export is numerically identical to the PyTorch model | ✅ max diff 1.5×10⁻⁵ |
+| TFLite (fp32) export matches the ONNX graph, batch=1 (matching on-device usage) | ✅ max diff 1.5×10⁻⁵ over 32 random points |
+| Every op in the compiled `.tflite` exists in TFLM's kernel registry | ✅ re-verified on the actual `.tflite`, not just the ONNX graph |
+| Predicts pressure/flow correctly across the trained pipe range (vs. MOC ground truth) | ⚠️ **~21% head field error, ~14% flow field error** on 12 held-out pipes — usable as a rough virtual sensor, not a precision one. See README.md for what was tried to improve this and why a bigger/longer run wasn't a clear win. |
+| The model runs correctly *on the actual board* | ❌ **Not tested** — same caveat as §7, no Renesas hardware access here |
+| `.tflite` conversion (onnx2tf) | ✅ **Run and verified** (unlike §1, where this step was left for you) |
+
+### 8.5 A build-environment gotcha, in case you hit it too
+
+Exporting to ONNX (`torch.onnx.export`) **segfaulted** in the environment this was built in
+whenever a CUDA context was active — reproduced independently of this specific model, so it's a
+torch/CUDA-driver interaction issue, not a bug in the network. `scripts/08_export_general_onnx.py`
+works around it by setting `CUDA_VISIBLE_DEVICES=""` before `torch` is even imported (export never
+needs a GPU for a network this small anyway). If you hit a segfault re-running `torch.onnx.export`
+yourself on a machine with a GPU, try the same thing first.
+
+### 8.6 When this model stops being valid
+
+Outside the trained range (README.md's table: length 20–300 m, DN25–DN200, wave speed 300–1400
+m/s, leak 0.5–10% of design flow, leak position 5–95% of the pipe, valve closure fixed at 20% over
+20 ms) — extrapolation is untested. Narrow the trained range in `leakpinn/domain.py` and retrain
+(`scripts/07`–`09`) if your actual fleet of pipes is a tighter subset than this; a narrower range
+converges to noticeably better accuracy, the same way §1's single-pipe model reaches 0.4%.

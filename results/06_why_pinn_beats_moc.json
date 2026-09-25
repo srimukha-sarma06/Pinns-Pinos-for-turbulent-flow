@@ -1,8 +1,8 @@
 {
   "a_true": 1388.2553064231713,
   "a_wrong": 1150.0,
-  "a_pinn_corrected": 1383.4285775757112,
-  "naive_moc_Q_rmse_Ls": 0.046156558604092235,
-  "pinn_Q_rmse_Ls": 0.0011575277321037747,
-  "improvement_factor": 39.875121194896956
+  "a_pinn_corrected": 1385.2280685277835,
+  "naive_moc_Q_rmse_Ls": 0.04615655860419723,
+  "pinn_Q_rmse_Ls": 0.0008958602226858166,
+  "improvement_factor": 51.52205381529101
 }

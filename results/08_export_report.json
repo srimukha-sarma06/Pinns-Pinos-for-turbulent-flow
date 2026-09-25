@@ -1,0 +1,62 @@
+{
+  "onnx_path": "results/08_general_forward_fp32.onnx",
+  "n_params": 16194,
+  "max_pytorch_onnx_diff": 1.479005209148454e-05,
+  "ops_used": [
+    "Add",
+    "Concat",
+    "Constant",
+    "Cos",
+    "Div",
+    "Gemm",
+    "Log",
+    "MatMul",
+    "Mul",
+    "Relu",
+    "Sin",
+    "Slice",
+    "Sqrt",
+    "Sub",
+    "Tanh"
+  ],
+  "unsupported_ops": [],
+  "onnx_file_bytes": 78302,
+  "input_columns": [
+    "xi",
+    "tau",
+    "xiL",
+    "kappa",
+    "phi",
+    "H1n",
+    "H2n",
+    "xi1",
+    "B_nom",
+    "qv0"
+  ],
+  "output_columns": [
+    "H_m",
+    "Q_m3s"
+  ],
+  "param_ranges": {
+    "width": 64,
+    "depth": 4,
+    "sigma_xi": 1.0,
+    "sigma_tau": 4.0,
+    "n_feat": 24,
+    "n_scenarios": 64,
+    "pts_per_scenario": 150,
+    "bnd_per_scenario": 32,
+    "refresh_every": 40,
+    "adam_iters": 6000,
+    "lr": 0.002,
+    "lr_decay_steps": 1500,
+    "lr_decay_rate": 0.6,
+    "lbfgs_iters": 400,
+    "lbfgs_scenarios": 128,
+    "w_pde": 1.0,
+    "w_bc": 4.0,
+    "Hs": 10.0,
+    "seed": 0,
+    "display_every": 250
+  }
+}

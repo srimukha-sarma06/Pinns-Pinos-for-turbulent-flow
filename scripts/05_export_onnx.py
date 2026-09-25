@@ -19,12 +19,18 @@ Run: python scripts/05_export_onnx.py
 import sys, os, json, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DDE_BACKEND", "pytorch")
+# torch.onnx.export segfaults in this environment whenever a CUDA context is active anywhere in
+# the process -- reproduced independently of this model (a torch/CUDA-driver interaction issue),
+# and moving just the exported tensors to .cpu() does NOT avoid it, only never initializing CUDA
+# at all does. This network is tiny (2,274 params, a few thousand training iterations), so training
+# on CPU instead of GPU costs a couple of minutes at most -- a fine trade for not segfaulting.
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 import numpy as np
 import torch
 import onnx
 import onnxruntime as ort
 from leakpinn.synth import make_dataset
-from leakpinn.pinn import PINNConfig, build_problem, fit
+from leakpinn.pinn import PINNConfig, build_problem, fit, DEVICE
 from leakpinn.physics import G
 
 # Ops confirmed present in tensorflow/lite/micro/kernels/micro_ops.h (checked directly against
@@ -80,12 +86,16 @@ print(f"network has {n_params} parameters")
 test_x64 = np.random.default_rng(0).uniform(0, 1, size=(200, 2)).astype(np.float64)
 test_x64[:, 1] *= prob.tau_end
 with torch.no_grad():
-    y_torch64 = res.model.net(torch.tensor(test_x64)).numpy()   # still float64 here
+    y_torch64 = res.model.net(torch.tensor(test_x64, device=DEVICE)).cpu().numpy()   # still float64 here
 
-net = res.model.net.eval().float()   # in-place cast: res.model.net is now float32 from here on
+# Move to CPU before exporting: torch.onnx.export segfaults in this environment whenever a CUDA
+# context is active (reproduced independently of this model -- a torch/driver interaction issue,
+# not a bug here), and export never needs a GPU for a network this small anyway. Training above
+# still runs on GPU when available (DEVICE), only this export step is forced onto the CPU.
+net = res.model.net.eval().float().cpu()   # in-place cast+move: res.model.net is float32 CPU from here on
 os.makedirs("results", exist_ok=True)
 onnx_path = "results/05_pinn_forward_fp32.onnx"
-dummy = torch.zeros(1, 2, dtype=torch.float32)   # input: (xi, tau), both normalised
+dummy = torch.zeros(1, 2, dtype=torch.float32, device="cpu")   # input: (xi, tau), both normalised
 torch.onnx.export(
     net, dummy, onnx_path,
     input_names=["xi_tau"], output_names=["h_q"],

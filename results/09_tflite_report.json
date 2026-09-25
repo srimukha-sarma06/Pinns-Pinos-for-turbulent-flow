@@ -1,0 +1,23 @@
+{
+  "tflite_path": "results/09_general_forward_fp32.tflite",
+  "tflite_bytes": 78104,
+  "onnx_vs_tflite_max_diff": 1.52587890625e-05,
+  "n_test_points": 32,
+  "tflite_ops_used": [
+    "ADD",
+    "BATCH_MATMUL",
+    "CONCATENATION",
+    "COS",
+    "DIV",
+    "FULLY_CONNECTED",
+    "LOG",
+    "MUL",
+    "SIN",
+    "SLICE",
+    "SPLIT",
+    "SQRT",
+    "SUB",
+    "TANH"
+  ],
+  "tflite_unsupported_ops": []
+}
