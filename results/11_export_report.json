@@ -1,0 +1,25 @@
+{
+  "onnx_path": "results/11_localizer_fp32.onnx",
+  "n_params": 21698,
+  "max_pytorch_onnx_diff": 1.755440659945151e-06,
+  "ops_used": [
+    "Add",
+    "Concat",
+    "Constant",
+    "Div",
+    "Exp",
+    "Gemm",
+    "Mul",
+    "Sigmoid",
+    "Slice",
+    "Sub",
+    "Tanh"
+  ],
+  "unsupported_ops": [],
+  "onnx_file_bytes": 91328,
+  "input_dim": 206,
+  "output_columns": [
+    "xiL",
+    "kappa"
+  ]
+}

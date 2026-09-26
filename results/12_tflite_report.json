@@ -1,0 +1,18 @@
+{
+  "tflite_path": "results/12_localizer_fp32.tflite",
+  "tflite_bytes": 92268,
+  "onnx_vs_tflite_max_diff": 6.67572021484375e-06,
+  "n_test_points": 32,
+  "tflite_ops_used": [
+    "ADD",
+    "CONCATENATION",
+    "EXP",
+    "FULLY_CONNECTED",
+    "LOGISTIC",
+    "MUL",
+    "SPLIT",
+    "SUB",
+    "TANH"
+  ],
+  "tflite_unsupported_ops": []
+}

@@ -25,7 +25,7 @@ conditioning dimension to the network for no requested benefit.
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
-from .physics import Pipe, Valve, Leak, G, design_valve
+from .physics import Pipe, Valve, Leak, Constriction, G, design_valve
 from .moc import MOC
 
 TAU_END = 3.2          # fixed dimensionless training horizon (~3 pipe wave-transit times), same for every pipe
@@ -39,7 +39,9 @@ RANGES = dict(
     v_design=(1.0, 2.5),
     xiL=(0.05, 0.95),
     qL_frac=(0.005, 0.10),
+    area_frac=(0.15, 0.85),   # constriction: open throat area / full bore area (0.15 = 85% blocked)
 )
+CD_CONSTRICTION = 0.7          # nominal discharge coefficient for the constriction orifice model
 
 
 @dataclass
@@ -101,7 +103,7 @@ def scenario_consts(sc: Scenario, x1_ref: float = 10.0, N: int = 60) -> dict:
     f = float(p.friction_factor(p.Q_design))
     phi = f * p.L * G / (2.0 * p.D * a ** 2)
     m = MOC(p, v, a, N, leak)
-    H, _, _ = m.steady()
+    H, _, _, _ = m.steady()
     xi1 = min(x1_ref, 0.3 * p.L) / p.L          # keep the reference point inside the pipe even for short pipes
     n1 = int(round(xi1 * p.L / m.dx))
     H1_0, H2_0 = float(H[n1]), float(H[N])
@@ -109,3 +111,57 @@ def scenario_consts(sc: Scenario, x1_ref: float = 10.0, N: int = 60) -> dict:
     qv0 = B_nom * p.Q_design
     tau_c = a * v.t_close / p.L
     return dict(B_nom=B_nom, phi=phi, H1_0=H1_0, H2_0=H2_0, xi1=xi1, kappa=kappa, qv0=qv0, tau_c=tau_c)
+
+
+# --------------------------------------------------------------------------------------------
+# Three-class scenario sampler (none / leak / constriction) for the anomaly-detection problem
+# -- see CONSTRICTION_DETECTION_PLAN.md. Deliberately separate from Scenario/sample_scenario
+# above: those are used throughout the (leak-only) forward-model and localization pipelines,
+# which assume a leak always exists -- adding a class dimension there would risk breaking that
+# already-validated code. `AnomalyScenario` covers the wider "what kind of anomaly, if any" case.
+@dataclass
+class AnomalyScenario:
+    pipe: Pipe
+    valve: Valve
+    a: float
+    kind: str                       # "none" | "leak" | "constriction"
+    leak: Leak | None
+    constriction: Constriction | None
+
+
+def sample_anomaly_scenario(rng: np.random.Generator, p_none: float = 1 / 3, p_leak: float = 1 / 3,
+                            max_tries: int = 50) -> AnomalyScenario:
+    """Same pipe/valve sampling as sample_scenario(), but the anomaly itself is one of three
+    classes drawn with the given probabilities (p_constriction = 1 - p_none - p_leak)."""
+    u = rng.uniform()
+    kind = "none" if u < p_none else ("leak" if u < p_none + p_leak else "constriction")
+    for _ in range(max_tries):
+        L = float(rng.uniform(*RANGES["L"]))
+        D = float(rng.uniform(*RANGES["D"]))
+        a = float(rng.uniform(*RANGES["a"]))
+        H_res = float(rng.uniform(*RANGES["H_res"]))
+        v = float(rng.uniform(*RANGES["v_design"]))
+        A = np.pi * D ** 2 / 4.0
+        Q_design = v * A
+        e = D / float(rng.uniform(9.0, 25.0))
+        rough = float(rng.uniform(1.5e-6, 4.5e-5))
+        pipe = Pipe(L=L, D=D, e=e, rough=rough, H_res=H_res, Q_design=Q_design)
+        f = float(pipe.friction_factor(Q_design))
+        hf = f * pipe.L / pipe.D * (Q_design / pipe.A) ** 2 / (2 * G)
+        if hf > 0.6 * H_res:
+            continue
+        valve = design_valve(pipe, dtau=0.20, t_close=0.020)
+
+        leak = None; constriction = None
+        if kind == "leak":
+            xiL = float(rng.uniform(*RANGES["xiL"]))
+            qL_frac = float(rng.uniform(*RANGES["qL_frac"]))
+            CdA = qL_frac * Q_design / np.sqrt(2.0 * G * H_res)
+            leak = Leak(xiL * L, float(CdA))
+        elif kind == "constriction":
+            xiC = float(rng.uniform(*RANGES["xiL"]))    # same location range as a leak
+            area_frac = float(rng.uniform(*RANGES["area_frac"]))
+            CdA_c = CD_CONSTRICTION * area_frac * A
+            constriction = Constriction(xiC * L, float(CdA_c))
+        return AnomalyScenario(pipe, valve, a, kind, leak, constriction)
+    raise RuntimeError("sample_anomaly_scenario: could not find a feasible combination in max_tries")

@@ -18,12 +18,12 @@ check("steady state is a fixed point of the scheme", np.abs(r["H"] - r["H"][0]).
       f"max drift {np.abs(r['H']-r['H'][0]).max():.2e} m")
 
 # 2. mass balance of steady state with a leak
-m = MOC(p, v, a, 200, Leak(37.3, 3.6e-6)); H, Qd, Qu = m.steady()
+m = MOC(p, v, a, 200, Leak(37.3, 3.6e-6)); H, Hu, Qd, Qu = m.steady()
 check("steady mass balance across leak", abs((Qu[m.iL] - Qd[m.iL]) - m.CL * np.sqrt(H[m.iL])) < 1e-12)
-check("no leak => design flow recovered", abs(MOC(p, v, a, 200).steady()[1][-1] - p.Q_design) < 1e-9)
+check("no leak => design flow recovered", abs(MOC(p, v, a, 200).steady()[2][-1] - p.Q_design) < 1e-9)
 
 # 3. Joukowsky: first plateau at the valve equals B*(Q0-Q) with the valve law (no leak, before any reflection)
-m0 = MOC(p, v, a, 400); r0 = m0.run(0.3); H0, Q0, _ = m0.steady()
+m0 = MOC(p, v, a, 400); r0 = m0.run(0.3); H0, _, Q0, _ = m0.steady()
 tau_f = 1 - v.dtau
 from scipy.optimize import brentq
 dH = brentq(lambda x: B * (Q0[-1] - v.Cv * tau_f * np.sqrt(H0[-1] + x)) - x, 0, 60)
@@ -38,7 +38,7 @@ t_th = v.t_close / 2 + 2 * p.L / a
 check("reservoir echo returns after ~2L/a", abs(t_dn - t_th) < 0.008, f"{t_dn*1e3:.1f} ms vs {t_th*1e3:.1f} ms")
 
 # 5. reflection coefficient of the leak, R = -GB/(2+GB)
-leak = Leak(37.3, 3.6e-6); ml = MOC(p, v, a, 400, leak); rl = ml.run(0.3); Hl, _, _ = ml.steady()
+leak = Leak(37.3, 3.6e-6); ml = MOC(p, v, a, 400, leak); rl = ml.run(0.3); Hl, _, _, _ = ml.steady()
 G_ = leak.CL() * 0.5 / np.sqrt(Hl[ml.iL]); R_th = -G_ * B / (2 + G_ * B)
 diff = rl["H"][:, -1] - r0["H"][:, -1]
 t_echo = 2 * (p.L - ml.x_leak_actual) / a

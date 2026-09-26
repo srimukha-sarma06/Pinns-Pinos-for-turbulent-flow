@@ -9,7 +9,7 @@ Sensor model (industrial dynamic pressure transmitter, 0-10 bar gauge):
 from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
-from .physics import Pipe, Leak, design_valve
+from .physics import Pipe, Leak, Constriction, design_valve
 from .moc import MOC
 
 FS_SPAN_M = 10.0e5 / (998.2 * 9.80665)   # 10 bar in metres of water  (~102 m)
@@ -30,12 +30,13 @@ class Dataset:
 
 def make_dataset(pipe: Pipe | None = None, leak_x=37.3, CdA=3.6e-6, a_true=None,
                  noise_std=0.10, fs=1000.0, T=0.30, t_pre=0.10, x1=10.0,
-                 N_truth=400, seed=0, dtau=0.20, t_close=0.020, quantise=True) -> Dataset:
+                 N_truth=400, seed=0, dtau=0.20, t_close=0.020, quantise=True,
+                 constriction: Constriction | None = None) -> Dataset:
     pipe = pipe or Pipe()
     a_true = a_true or pipe.wave_speed()
     valve = design_valve(pipe, dtau=dtau, t_close=t_close)
     leak = None if CdA is None or CdA <= 0 else Leak(leak_x, CdA)
-    m = MOC(pipe, valve, a_true, N_truth, leak)
+    m = MOC(pipe, valve, a_true, N_truth, leak, constriction=constriction)
     res = m.run(T)
     tm, Hm = res["t"], res["H"]
     n1 = int(round(x1 / m.dx)); n2 = N_truth
@@ -52,9 +53,11 @@ def make_dataset(pipe: Pipe | None = None, leak_x=37.3, CdA=3.6e-6, a_true=None,
             y = np.round(y / lsb) * lsb
         return y
     H_meas, H_pre = sense(H_true), sense(H_pre_true)
-    # truth fields on a 1 m x 1 ms grid (for scoring reconstructions)
-    xi = np.arange(0, N_truth + 1, N_truth // int(pipe.L)) * m.dx
-    idx = np.arange(0, N_truth + 1, N_truth // int(pipe.L))
+    # truth fields on a ~1 m x 1 ms grid (for scoring reconstructions) -- step clamped to >=1 so
+    # this doesn't divide by zero on a pipe longer than N_truth grid nodes (coarser than 1 m then)
+    step = max(1, N_truth // int(pipe.L))
+    xi = np.arange(0, N_truth + 1, step) * m.dx
+    idx = np.arange(0, N_truth + 1, step)
     Hf = np.stack([np.interp(t, tm, Hm[:, i]) for i in idx], axis=1)
     Qf = np.stack([np.interp(t, tm, res["Q"][:, i]) for i in idx], axis=1)
     truth = dict(leak_x=(m.x_leak_actual if leak else np.nan), CdA=(CdA if leak else 0.0), a=a_true,

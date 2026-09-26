@@ -80,6 +80,26 @@ class Leak:
         return self.CdA * np.sqrt(2.0 * G)
 
 
+@dataclass
+class Constriction:
+    """A partial blockage: no mass loss (Q continuous), but a local head loss from the area
+    reduction, modeled as an orifice-in-pipe -- Q = CdA_c * sqrt(2 g (Hu - Hd)), Q > 0 assumed
+    (same forward-flow convention as Leak/Valve elsewhere in this module). CdA_c is the effective
+    open throat area (discharge coefficient * constricted area), playing exactly the role Leak.CdA
+    plays -- NOT the same physical quantity (nothing is discharged out of the pipe here), just the
+    same style of lumped effective-area parameter.
+
+    See CONSTRICTION_DETECTION_PLAN.md for the full derivation, including the MOC junction
+    condition and the closed-form small-signal reflection coefficient this implies.
+    """
+    x: float                  # m from the reservoir
+    CdA_c: float               # m^2, effective open throat area
+
+    def RC(self) -> float:
+        """Rc in  Hu - Hd = Rc * Q * |Q|."""
+        return 1.0 / (2.0 * G * self.CdA_c ** 2)
+
+
 def design_valve(pipe: Pipe, dtau=0.20, t_close=0.020) -> Valve:
     """Choose Cv so that the leak-free pipe passes exactly Q_design at full opening."""
     # friction-only steady state (no leak):  H_v = H_res - h_f(Q)
