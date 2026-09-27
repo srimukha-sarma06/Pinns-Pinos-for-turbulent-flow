@@ -1,0 +1,26 @@
+{
+  "tflite_path": "results/anomaly_classifier_fp32.tflite",
+  "tflite_bytes": 162248,
+  "onnx_vs_tflite_max_diff": 6.866455078125e-05,
+  "n_test_points": 32,
+  "tflite_ops_used": [
+    "ADD",
+    "CONCATENATION",
+    "EXP",
+    "FULLY_CONNECTED",
+    "LOGISTIC",
+    "MUL",
+    "SOFTMAX",
+    "SUB",
+    "TANH"
+  ],
+  "tflite_unsupported_ops": [],
+  "output_columns": [
+    "p_none",
+    "p_leak",
+    "p_constriction",
+    "xi_frac",
+    "kappa_leak",
+    "kappa_constriction"
+  ]
+}

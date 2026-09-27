@@ -1,0 +1,30 @@
+{
+  "onnx_path": "results/17_classifier_fp32.onnx",
+  "n_params": 39078,
+  "max_pytorch_onnx_diff": 0.0005019484753461256,
+  "ops_used": [
+    "Add",
+    "Concat",
+    "Constant",
+    "Div",
+    "Exp",
+    "Gemm",
+    "Mul",
+    "Sigmoid",
+    "Softmax",
+    "Sub",
+    "Tanh"
+  ],
+  "unsupported_ops": [],
+  "onnx_file_bytes": 160438,
+  "input_dim": 206,
+  "output_columns": [
+    "p_none",
+    "p_leak",
+    "p_constriction",
+    "xi_frac",
+    "kappa_leak",
+    "kappa_constriction"
+  ],
+  "sanity_check_acc_n50": 0.74
+}

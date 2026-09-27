@@ -1,0 +1,26 @@
+{
+  "n_train": 20000,
+  "n_heldout": 300,
+  "seed_heldout": 950000,
+  "accuracy": 0.8533333333333334,
+  "confusion_matrix": {
+    "none": {
+      "none": 76,
+      "leak": 5,
+      "constriction": 12
+    },
+    "leak": {
+      "none": 6,
+      "leak": 87,
+      "constriction": 3
+    },
+    "constriction": {
+      "none": 16,
+      "leak": 2,
+      "constriction": 93
+    }
+  },
+  "localization_mae_m": 23.40181586425282,
+  "localization_median_m": 13.590842923326115,
+  "n_localized": 180
+}
