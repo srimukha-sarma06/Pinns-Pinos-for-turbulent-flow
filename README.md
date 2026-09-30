@@ -1,314 +1,885 @@
-# Physics-Informed Leak Localisation (DeepXDE + PyTorch)
+# Embedded Pipeline: 2-Input PINN Pressure Field + 6-Output Anomaly Classifier
 
-Reconstructs the location and size of a leak in a pressurised pipeline from **two pressure
-sensors** and a controlled valve transient, using a Physics-Informed Neural Network (PINN)
-built on the 1-D transient continuity + momentum (water-hammer) equations with a
-pressure-dependent leak sink term. See `PROBLEM_STATEMENT.md`-style detail in the chat history
-for the full derivation; this README is about the code.
+## 1. Purpose
 
-## Status — what's solid vs. what's still open
+This document describes the embedded inference pipeline built from the current `Pinns-Pinos-for-turbulent-flow` repository.
 
-| Piece | Status |
-|---|---|
-| `leakpinn/physics.py` — real pipe/fluid/valve parameters | ✅ done. DN50 Sch40 steel, water at 20°C, Swamee-Jain friction, Korteweg wave speed |
-| `leakpinn/moc.py` — Method-of-Characteristics ground-truth solver | ✅ done, **validated** (`scripts/01_validate_moc.py`, 10/10 checks pass) |
-| `leakpinn/synth.py` — realistic synthetic sensor data | ✅ done (1 kHz, noise, 12-bit ADC quantisation) |
-| `leakpinn/baselines.py` — time-of-flight & MOC-search+LM inversion | ✅ done, **tested on 6 scenarios** (`results/03_baseline_comparison.json`). Includes a fixed bug: `estimate_wave_speed` originally only searched the first 100 ms for the pulse transit, which silently failed (and fell back to a wrong default) whenever the true wave speed was much slower than typical steel-pipe values — now searches the full record |
-| `leakpinn/pinn.py` — forward PINN (leak params **given**) | ✅ done, **validated**: 0.4% flow error vs MOC truth (`scripts/02_forward_pinn.py`) |
-| `leakpinn/pinn.py` — **inverse** PINN (leak params **inferred**) | ⚠️ **not yet reliably convergent** — see below |
-| `leakpinn/general_pinn.py` — **generalized** forward PINN, one network for a *range* of pipes | ✅ works, trained + exported to fp32 TFLite (`scripts/07`–`09`), but noticeably less accurate than the single-pipe model above (~20% field NRMSE vs 0.4%) — see "Generalized forward model" below |
+The system uses two separate TFLite models:
 
-### The open issue, honestly
+1. A **2-input single-pipe forward PINN** to generate a pressure/flow field over a normalized space-time grid.
+2. A **206-input, 6-output anomaly classifier** to classify the event as `none`, `leak`, or `constriction`, and to estimate anomaly location and class-specific severity.
 
-Letting the network *discover* the leak location by gradient descent (instead of being told it)
-does not yet reliably converge to the true location from an arbitrary start. What I found while
-debugging:
+The intended displayed result is an **annotated pressure field**:
 
-1. **Found and fixed a real bug**: the leak-position parameter used `torch.clamp`, which has
-   zero gradient outside its bounds — once the optimiser pushed the raw value past the bound it
-   froze there forever. Fixed with a smooth sigmoid reparameterisation (see `Params.get`).
-2. **Confirmed it's not a genuine physics degeneracy.** I checked directly against the MOC
-   ground-truth solver: a leak hypothesised near the reservoir fits the sensor data much worse
-   (cost ≈ 20–30) than the true mid-pipe location (cost ≈ 6). So the correct answer really is
-   identifiable from this data — the PINN's *training dynamics* are the problem, not the physics.
-3. **Most likely cause**: with collocation points drawn uniformly over the whole (x, t) domain,
-   very few of them land near the narrow Gaussian-smoothed leak term, so the gradient telling the
-   optimiser "mass conservation is violated at the wrong location" is weak and noisy. I added
-   `LeakZoomSampler`, an adaptive/importance-sampling callback that concentrates collocation
-   points around the current leak-position estimate (redrawn periodically) — this is a standard
-   fix for inverse-source PINNs, but I ran out of time to confirm it fully solves it (early runs
-   improved but hadn't converged as of writing).
-
-**Recommended next steps**, in order of effort:
-- Let a longer run finish with `LeakZoomSampler` active (already wired into `fit()`) — this is
-  the most promising fix and just needs more wall-clock time than this environment (single CPU
-  core) allowed.
-- Try a hard/exact junction condition at `x = x_L` (continuity of H, `Q_down = Q_up − CdA√H`)
-  instead of a smoothed Gaussian sink — sharper gradient signal, more code.
-- Multi-start (`multistart_fit` in `leakpinn/pinn.py`) + take the run with lowest final loss.
-
-**For your submission**: the MOC-search baseline (`leakpinn/baselines.py::moc_search`) already
-solves the inverse problem well (sub-metre accuracy on 5 of 6 test cases — see
-`results/03_baseline_comparison.json`) and is fully working today. If the PINN inverse fit isn't
-converged in time, present it as: forward PINN = fast differentiable surrogate (validated), leak
-localisation = MOC-search (validated), PINN-based inversion = in-progress research direction with
-a documented, diagnosed convergence issue. That is a defensible, honest story — and arguably more
-"real research" than a demo that quietly works by luck.
-
-## Repository layout
-
-```
-leakpinn/
-  physics.py      Pipe / Valve / Leak dataclasses, all real engineering values
-  moc.py          Method-of-Characteristics solver (ground truth + strong baseline)
-  synth.py        Synthetic sensor data generator (noise, quantisation, sampling)
-  baselines.py    time_of_flight(), moc_search() — working inverse solvers
-  pinn.py         DeepXDE/PyTorch PINN: SINGLE fixed pipe, network architectures, inverse fit
-  metrics.py      Scoring against MOC truth (never fed to the model)
-  domain.py       Randomized pipe/valve/leak scenario sampler for the generalized model
-  general_pinn.py Generalized forward PINN: one network across a RANGE of pipes + TFLM-safe export
-scripts/
-  01_validate_moc.py          Sanity-checks the MOC solver against closed-form hydraulics
-  02_forward_pinn.py          PINN with leak params GIVEN — validates the PINN formulation
-  03_compare_baselines.py     time-of-flight & MOC-search across 6 test cases
-  04_visualize.py             Space-time contour / snapshot plots, PINN vs MOC
-  05_export_onnx.py           Export the SINGLE-pipe forward PINN to ONNX + TFLM op check
-  06_why_pinn_beats_moc.py    Wave-speed-uncertainty experiment (PINN self-corrects, MOC can't)
-  07_train_general_forward.py Train the generalized (any-pipe) forward PINN + validate vs MOC
-  08_export_general_onnx.py   Export the generalized model to ONNX (TFLM-safe ops only)
-  09_convert_tflite.py        Convert to fp32 TFLite, verify against the ONNX graph and TFLM ops
-results/                      JSON + PNG + model outputs from the scripts above
-requirements.txt
+```text
+Pressure sensors / event capture
+            |
+            +-----------------------------+
+            |                             |
+            v                             v
+     206-feature builder          normalized grid (xi,tau)
+            |                             |
+            v                             v
+   6-output classifier             2-input PINN TFLite
+            |                             |
+            |                             v
+            |                      h(xi,tau), q(xi,tau)
+            |                             |
+            |                             v
+            |                    pressure reconstruction
+            |                             |
+            +----------->  pressure grid P(xi,tau)
+                          + anomaly overlay
+                          |
+                          v
+                    final display map
 ```
 
-## GPU
+**Important:** the displayed map is an anomaly-annotated pressure field. The 6-output classifier does not itself modify the pressure values produced by the 2-input PINN. If a physically anomaly-updated field is required, a forward model conditioned on the predicted anomaly must be used.
 
-This code runs on GPU automatically if `torch.cuda.is_available()` (DeepXDE's own PyTorch backend
-sets that as the default device on import — see `leakpinn/pinn.py` top of file for the
-device-handling comment). Nothing to configure. The MOC solver (`moc.py`) and baselines
-(`baselines.py`) are pure NumPy/SciPy and always run on CPU — that's fine, they're not the
-bottleneck (the PINN training is).
+---
 
-## Renesas Ethos-U55 deployment — single fixed pipe (CPU-only, no NPU)
+## 2. Models used
 
-`scripts/05_export_onnx.py` trains a small forward PINN (2,274 parameters at the default
-`width=32, depth=3`) and exports it to ONNX, then checks every op in the exported graph against
-TensorFlow Lite Micro's actual kernel registry (`tensorflow/lite/micro/kernels/micro_ops.h`,
-checked directly against current TFLM source — not guessed from memory). Since you're not using
-the Ethos-U55 NPU, inference runs as plain CPU TFLM kernels, and **all four network architectures
-in this project are supported this way**, including the Fourier-feature ones (`sin`/`cos` are
-native TFLM ops: `Register_SIN()`, `Register_COS()`) — no need to avoid them.
+### 2.1 Single-pipe forward PINN
 
-```
-python scripts/05_export_onnx.py
+Source:
+
+```text
+leakpinn/pinn.py
 ```
 
-This produces `results/05_pinn_forward.onnx` and `results/05_export_report.json` (parameter
-count, PyTorch-vs-ONNX numerical diff, and the op-support check). Next step (not run by the
-script, needs a full TensorFlow install):
+Exported model:
 
-```bash
-pip install onnx2tf tensorflow
-onnx2tf -i results/05_pinn_forward.onnx -o results/05_tflite_model/
+```text
+results/05_pinn_forward_fp32.onnx
+results/05_tflite_model/<generated .tflite>
 ```
 
-That `.tflite` file is what you hand to Renesas FSP's TFLM integration.
+The deployed network is the small plain MLP export created by `scripts/05_export_onnx.py`:
 
-**On ST Edge AI Developer Cloud**: its platform selector only offers STM32 MCU / STM32 MPU /
-Stellar MCU / MEMS ISPU — there is no Renesas option, so it cannot give real benchmark numbers
-for this board. It can still load the ONNX/TFLite file for a generic sanity check, but the op
-support / memory numbers it reports are for ST's own compiler, not Renesas's — treat it as a
-secondary check at most, not a substitute for the TFLM op-list verification above.
-
-## Generalized forward model — any pipe, not just one fixed geometry
-
-The model above is trained on and only valid for ONE specific pipe (100 m, DN50 steel, leak at
-37.25 m). `leakpinn/general_pinn.py` is a second forward model that takes the pipe's own geometry,
-material and leak location/size as **inputs** instead of baking them in, so one trained network
-(one `.tflite` file) works across a whole *range* of pipes — retraining per pipe is no longer
-required. It still answers the same question as the model above ("what's the pressure/flow here,
-given a known leak") — it does not do leak *localisation* itself, same caveat as before (§5 below).
-
-### Trained range
-
-`leakpinn/domain.py` samples pipes uniformly at random from this "moderate industrial" range
-(confirmed with the project owner) for training:
-
-| quantity | range |
-|---|---|
-| pipe length `L` | 20 – 300 m |
-| inner diameter `D` | 25 – 200 mm (~DN25 – DN200) |
-| wave speed `a` | 300 – 1400 m/s (spans HDPE/PVC up to steel; sampled directly, not derived from a material model — see `domain.py`'s docstring) |
-| reservoir head `H_res` | 20 – 80 m gauge |
-| design velocity | 1.0 – 2.5 m/s |
-| leak location | 5% – 95% of `L` |
-| leak size | 0.5% – 10% of design flow |
-
-Valve schedule (20% closure over 20 ms) is kept fixed across every sampled pipe. Extrapolating
-outside this range (e.g. a 500 m pipe, or a leak at 1% of `L`) is untested and not recommended
-without retraining.
-
-### Why a plain PyTorch training loop, not DeepXDE
-
-Every other model in this repo is trained through `dde.Model`/`dde.data.PDE`. The generalized
-model instead needs each collocation point to also carry ~8 per-pipe numbers (leak position/size,
-friction number, reference heads, ...) that vary row to row — stacking those onto DeepXDE's
-`dde.geometry` breaks its own dimension bookkeeping (its boundary-condition filtering calls
-`geom.on_boundary(x)` on the *whole* points array, which assumes a small fixed dimensionality).
-`leakpinn/general_pinn.py` computes the same physics residuals directly with
-`torch.autograd.grad` — what `dde.grad.jacobian` does internally anyway — which sidesteps that.
-
-### Training + export + TFLite, in order
-
-```bash
-export DDE_BACKEND=pytorch
-python scripts/07_train_general_forward.py   # ~8-9 min on a laptop GPU (RTX 3050); trains + validates
-python scripts/08_export_general_onnx.py     # exports to ONNX, checks ops against TFLM
-pip install onnx2tf tensorflow               # one-time, only needed for the next step
-python scripts/09_convert_tflite.py          # converts to fp32 .tflite, verifies against ONNX
+```text
+Linear(2 -> 32)
+Tanh
+Linear(32 -> 32)
+Tanh
+Linear(32 -> 32)
+Tanh
+Linear(32 -> 2)
 ```
 
-This produces `results/07_general_pinn.pt` (PyTorch checkpoint), `results/08_general_forward_fp32.onnx`,
-and **`results/09_general_forward_fp32.tflite`** (78 KB, fp32) — the file to hand to Renesas FSP's
-TFLM integration. `scripts/09` also runs a numerical check (ONNX vs. the actual compiled `.tflite`,
-batch=1, matching how the MCU will call it): max difference **1.5×10⁻⁵** over 32 random test points.
+It has 2,274 trainable parameters. The exported graph accepts `[xi, tau]` and returns `[h, q]`. `xi` and `tau` are the normalized coordinates used by the PINN; the model internally maps them to its network-normalized representation. The model output is **not absolute pressure**. It is the dimensionless perturbation pair `[h, q]`.
 
-### No unsupported ops — including after TFLite's own graph rewrites
+The repository states that the fixed single-pipe model is specialized to its training scenario rather than being a general pipe model.
 
-Every op in the exported network is one of `Gemm/MatMul, Tanh, Sin, Cos, Mul, Sub, Add, Div, Sqrt,
-Log, Relu, Concat, Slice` — all confirmed present in TFLM's kernel registry
-(`tensorflow/lite/micro/kernels/micro_ops.h`). Two things from the single-pipe model's deployment
-path were deliberately avoided here because leak position/size are now **runtime inputs**, not
-constants baked in at export time:
+### 2.2 Six-output anomaly classifier
 
-- **`erf()`** — the single-pipe model's leak-smoothing step used `erf`, fine there only because it
-  ran as hand-written host C++ against one fixed leak position (see `DEPLOYMENT.md`'s old
-  Input/Output contract). With leak position now a runtime input, that reconstruction has to be
-  *inside* the graph, and `Erf` has no native TFLM kernel — replaced with a Tanh-based smooth step
-  (`leakpinn.general_pinn.smoothstep`, width-matched to `erf`'s slope at the transition).
-- **`torch.clamp`** — no native `Clip` kernel either; replaced everywhere with a Relu-based floor
-  (`floor_(x, m) = Relu(x - m) + m`), used identically in training and in the exported path so the
-  two stay numerically consistent.
+Source:
 
-`scripts/09` also re-checks the op list on the **actual compiled `.tflite`**, not just the ONNX
-graph — onnx2tf's own lowering rewrites some ops (this model's raw Fourier-feature `MatMul`
-becomes TFLite `BATCH_MATMUL`; repeated `Slice`s get fused into `SPLIT`). Both were confirmed
-against the live TFLM source (`Register_BATCH_MATMUL()`, `Register_SPLIT()` in
-`tensorflow/lite/micro/kernels/micro_ops.h`) before being added to the checked-safe list.
-
-### Input / output contract
-
-Input tensor, shape `[1, 10]`, float32 (see `leakpinn.general_pinn.DeployNet`'s docstring):
-
-| col | meaning | compute from your pipe as |
-|---|---|---|
-| 0 | `xi` | `x_metres / L` |
-| 1 | `tau` | `a * t_seconds / L` |
-| 2 | `xiL` | `leak_x_metres / L` |
-| 3 | `kappa` | `B_nom * CdA * sqrt(2*9.80665)`, `B_nom = a/(9.80665*A)` |
-| 4 | `phi` | `f * L * 9.80665 / (2*D*a**2)`, `f` = Darcy friction factor at design flow |
-| 5 | `H1n` | reference head near the reservoir, metres / 100 |
-| 6 | `H2n` | reference head at the valve, metres / 100 |
-| 7 | `xi1` | reference-point position / `L` |
-| 8 | `B_nom` | pipe impedance, `a/(9.80665*A)` |
-| 9 | `qv0` | `B_nom * Q_design` |
-
-Output tensor, shape `[1, 2]`: physical head `H` [m], physical flow `Q` [m³/s] — **already in
-physical units**, no host-side post-processing formula needed (unlike the single-pipe model's
-`DEPLOYMENT.md` reconstruction, which is baked into the ONNX/TFLite graph here instead, precisely
-because those constants are no longer fixed at export time).
-
-### Accuracy — the honest number
-
-On 12 held-out pipes never used in training (same style as `leakpinn/metrics.py`'s truth-never-fed
-discipline): **H field NRMSE ≈ 21%, Q field NRMSE ≈ 14%** against MOC ground truth
-(`results/07_general_pinn_validation.json`). That is far worse than the single-pipe specialist's
-0.4% flow error — expected, since this network has to cover a two-decade range of pipe lengths,
-diameters and wave speeds with the same ~16k parameters, instead of specializing to one geometry.
-A longer/larger training run (width=96, depth=5, 12k Adam + 800 L-BFGS iterations, ~57 min on an
-RTX 3050) was also tried and was **not** a clear improvement — H NRMSE dropped to ~20% but Q NRMSE
-rose to ~18% on the same held-out set, for ~7x the training time — so the smaller, cheaper config
-is what's actually shipped. If you need better accuracy than this: narrow the trained range (a
-tighter `RANGES` in `domain.py` around your actual deployment fleet of pipes converges much better,
-the same way the single-pipe model reaches 0.4%), train longer with a properly tuned schedule, or
-accept this as a rough virtual sensor and pair it with the classical `moc_search`/`time_of_flight`
-baselines for anything safety-critical.
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-export DDE_BACKEND=pytorch
+```text
+leakpinn/classify_net.py
 ```
 
-## Run
+Exported model:
 
-```bash
-python scripts/01_validate_moc.py        # ~5 s   — confirms the physics/solver are correct
-python scripts/03_compare_baselines.py   # ~5 min — working leak localisation, 6 scenarios
-python scripts/02_forward_pinn.py        # ~8 min — PINN forward-model validation
+```text
+results/anomaly_classifier_fp32.tflite
 ```
 
-Inverse PINN fitting (experimental, see above) — runs on GPU automatically if one is available:
+Input:
+
+```text
+[1, 206] float32
+```
+
+Output:
+
+```text
+[1, 6] float32
+```
+
+Output layout:
+
+```text
+[0] p_none
+[1] p_leak
+[2] p_constriction
+[3] xi_frac
+[4] kappa_leak
+[5] kappa_constriction
+```
+
+The first three values are a 3-class softmax. `xi_frac` is constrained to approximately `(0.03, 0.97)`. The two severity heads are positive. Only the severity head corresponding to the predicted anomaly class is meaningful; the other severity output is a don't-care value for that sample.
+
+The classifier's exported wrapper contains the training-set feature mean/std normalization, so the MCU supplies the **raw 206-feature vector**.
+
+---
+
+## 3. Complete runtime pipeline
+
+There are two computations after an event is captured.
+
+### Branch A: pressure-field generation
+
+The 2-input forward PINN is evaluated on a normalized grid:
+
+\[
+\xi \in [0,1]
+\]
+
+and
+
+\[
+\tau \in [0,\tau_{end}].
+\]
+
+At every grid point:
+
+\[
+[\xi,\tau]
+\rightarrow
+[h,q].
+\]
+
+The exported single-pipe network returns dimensionless `h` and `q`, so they must be reconstructed into physical head/flow using the same fixed scenario constants used by the export.
+
+For the current fixed-pipe model:
+
+\[
+h=\frac{H-H_{ss}(\xi)}{H_s}
+\]
+
+with `Hs = 10 m`, hence
+
+\[
+H(\xi,\tau)=H_{ss}(\xi)+10h(\xi,\tau).
+\]
+
+For the fixed exported model, the steady head profile is:
+
+\[
+H_{ss}(\xi)=H_{2,0}
++\frac{H_{1,0}-H_{2,0}}{1-\xi_1}(1-\xi).
+\]
+
+Then pressure is:
+
+\[
+P(\xi,\tau)=\rho g H(\xi,\tau).
+\]
+
+For a water model, pressure can be converted to bar with:
+
+\[
+P_{bar}=\frac{\rho g H}{10^5}.
+\]
+
+The fixed model can also reconstruct physical flow `Q` from the dimensionless `q` using the fixed pipe/leak constants documented by `DEPLOYMENT.md`.
+
+### Branch B: anomaly classification
+
+The two pressure sensors provide synchronized pressure time series. Those traces are converted into the same 206-feature representation used during classifier training.
+
+The classifier is then invoked **once per event**:
+
+\[
+X_{206}\rightarrow
+[p_{none},p_{leak},p_{constriction},\xi,\kappa_L,\kappa_C].
+\]
+
+The anomaly class is:
+
+```text
+class = argmax(p_none, p_leak, p_constriction)
+```
+
+Interpretation:
+
+```text
+0 -> none
+1 -> leak
+2 -> constriction
+```
+
+---
+
+## 4. 206-feature generation
+
+The feature definition is implemented in:
+
+```text
+leakpinn/localize_data.py
+```
+
+and reused unchanged for the none/leak/constriction classifier through:
+
+```text
+leakpinn/classify_data.py
+```
+
+The vector is:
+
+```text
+0..99       100 resampled perturbation-head samples, sensor 1
+100..199    100 resampled perturbation-head samples, sensor 2
+200         log(phi)
+201         H1_0 / 100
+202         H2_0 / 100
+203         log(B_nom)
+204         log(qv0)
+205         xi1
+```
+
+Thus:
+
+\[
+206=100+100+6.
+\]
+
+### 4.1 Pressure -> hydraulic head
+
+For gauge pressure:
+
+\[
+H=\frac{P}{\rho g}+z.
+\]
+
+The exact density and elevation convention must match the training setup.
+
+### 4.2 Steady baseline
+
+Using the pre-transient samples:
+
+\[
+H_{1,0}=mean(H_{1,pre})
+\]
+
+\[
+H_{2,0}=mean(H_{2,pre}).
+\]
+
+Then:
+
+\[
+\Delta H_1(t)=H_1(t)-H_{1,0}
+\]
+
+\[
+\Delta H_2(t)=H_2(t)-H_{2,0}.
+\]
+
+### 4.3 Wave speed estimate
+
+The repository's feature builder expects `a_est` and converts the dimensionless resampling grid back into physical time using:
+
+\[
+t_i=\frac{\tau_i L}{a_{est}}.
+\]
+
+The repository's baseline wave-speed estimator uses the relative arrival of the first pressure transient at the two sensors.
+
+### 4.4 100-point resampling
+
+The model uses:
+
+\[
+\tau_i=\frac{3.2i}{100},\quad i=0,\ldots,99
+\]
+
+then:
+
+\[
+t_i=\frac{\tau_iL}{a_{est}}.
+\]
+
+The original Python implementation uses linear interpolation (`np.interp`) of the baseline-subtracted traces.
+
+The MCU implementation should therefore perform the equivalent linear interpolation directly on the uniformly sampled ADC data.
+
+### 4.5 Six scalar features
+
+The repository calculates:
+
+\[
+A=\frac{\pi D^2}{4}
+\]
+
+\[
+B_{nom}=\frac{a_{est}}{gA}
+\]
+
+\[
+f=f(Q_{design})
+\]
+
+\[
+\phi=\frac{fLg}{2Da_{est}^2}
+\]
+
+\[
+q_{v0}=B_{nom}Q_{design}
+\]
+
+\[
+\xi_1=\frac{x_1}{L}.
+\]
+
+The six appended values are:
+
+```text
+log(phi)
+H1_0 / 100
+H2_0 / 100
+log(B_nom)
+log(qv0)
+xi1
+```
+
+---
+
+## 5. Classifier output handling
+
+The classifier returns:
+
+```text
+[p_none, p_leak, p_constriction,
+ xi_frac, kappa_leak, kappa_constriction]
+```
+
+### No anomaly
+
+If:
+
+```text
+argmax(first three outputs) == 0
+```
+
+display:
+
+```text
+NONE
+```
+
+Ignore:
+
+```text
+xi_frac
+kappa_leak
+kappa_constriction
+```
+
+### Leak
+
+If:
+
+```text
+argmax(first three outputs) == 1
+```
+
+use:
+
+\[
+\xi_{anomaly}=xi\_frac
+\]
+
+and:
+
+\[
+\kappa=\kappa_{leak}.
+\]
+
+Convert normalized location to metres:
+
+\[
+x_{anomaly}=\xi_{anomaly}L.
+\]
+
+The physical leak conductance can be recovered from the repository's leak parameter relationship:
+
+\[
+C_dA_{leak}=
+\frac{\kappa_{leak}}
+{B_{nom}\sqrt{2g}}.
+\]
+
+### Constriction
+
+If:
+
+```text
+argmax(first three outputs) == 2
+```
+
+use:
+
+\[
+\xi_{anomaly}=xi\_frac
+\]
+
+and:
+
+\[
+\kappa=\kappa_{constriction}.
+\]
+
+Convert normalized location to metres:
+
+\[
+x_{anomaly}=\xi_{anomaly}L.
+\]
+
+For the constriction model, the effective throat quantity is analogously related to the dimensionless severity:
+
+\[
+C_dA_c=
+\frac{\kappa_c}
+{B_{nom}\sqrt{2g}}.
+\]
+
+Again, do not use the leak severity output for a constriction, and vice versa.
+
+---
+
+## 6. Final pressure-map visualization
+
+The pressure grid is produced first from the 2-input PINN:
+
+\[
+P_{j,i}=P(\xi_i,\tau_j).
+\]
+
+The classifier result is then overlaid on the map.
+
+For example, if:
+
+```text
+class       = leak
+xi_frac     = 0.41
+kappa_leak  = 0.018
+```
+
+and:
+
+```text
+L = 100 m
+```
+
+then:
+
+```text
+anomaly position = 0.41 * 100 = 41 m
+```
+
+The display can draw a vertical marker at `x = 41 m` or `xi = 0.41` and annotate the selected severity.
+
+A conceptual screen is:
+
+```text
+                  POSITION ALONG PIPE
+        0                                   1
+        |-----------------------------------|
+ t=0    |███████████████████████████████████|
+        |████████████████▓▓▓▓███████████████|
+        |██████████▓▓▓▓▓▓▓▓▓▓▓▓█████████████|
+        |████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓████████████|
+        |███████████████████████████████████|
+        |                |                  |
+        |                |                  |
+        |           anomaly                |
+        |             x=41 m               |
+        +-----------------------------------+
+                       TIME
+
+        LEAK
+        Confidence: 0.92
+        Severity: κ_leak = 0.018
+```
+
+The pressure values themselves are still the values generated by the 2-input forward PINN. The classifier supplies the annotation.
+
+---
+
+## 7. MCU execution order
+
+### Event capture
+
+```text
+1. Trigger on the controlled valve transient.
+2. Capture synchronized pressure samples from sensor 1 and sensor 2.
+3. Keep a pre-transient section for H1_0/H2_0 estimation.
+```
+
+### Feature construction
+
+```text
+4. Convert pressure to hydraulic head.
+5. Compute H1_0 and H2_0.
+6. Subtract baselines.
+7. Estimate wave speed a_est from the two traces.
+8. Generate the 100-point dimensionless-time grid.
+9. Linearly interpolate both traces.
+10. Compute phi, B_nom, qv0, xi1.
+11. Assemble the 206-element float32 vector.
+```
+
+### Classifier
+
+```text
+12. Run anomaly_classifier_fp32.tflite once.
+13. Determine class from argmax(p_none, p_leak, p_constriction).
+14. Use xi_frac only for leak/constriction.
+15. Use kappa_leak only for leak.
+16. Use kappa_constriction only for constriction.
+```
+
+### Pressure grid
+
+```text
+17. Generate a normalized grid of (xi,tau) points.
+18. Run the 2-input forward TFLite model at each point.
+19. Reconstruct H(xi,tau).
+20. Convert H to pressure if required.
+21. Store/render P_grid.
+```
+
+### Display
+
+```text
+22. Render P_grid as the base heatmap.
+23. Overlay the anomaly marker only if class != NONE.
+24. Display the relevant severity only for the selected anomaly class.
+25. Display the class probabilities if desired.
+```
+
+---
+
+## 8. File list from the repository
+
+### Direct model implementation
+
+```text
+leakpinn/pinn.py
+```
+
+Single-pipe PINN architecture, normalization, hard output constraints, physical reconstruction helpers, and training problem definition.
+
+```text
+leakpinn/classify_net.py
+```
+
+The 206 -> 6 anomaly classifier, its class head, location head, two severity heads, and deployment normalization wrapper.
+
+```text
+leakpinn/localize_data.py
+```
+
+Authoritative definition of the 206-feature input vector, baseline calculation, resampling, `B_nom`, `phi`, `qv0`, and sensor-position feature.
+
+```text
+leakpinn/classify_data.py
+```
+
+Three-class (`none`/`leak`/`constriction`) training-data pipeline. Reuses the same 206-feature representation.
+
+### Physics and training-data support
+
+```text
+leakpinn/physics.py
+```
+
+Pipe, valve, leak and fluid parameters; cross-sectional area; wave-speed model; Reynolds number; Darcy friction factor; valve relationships and leak/constriction hydraulic quantities.
+
+```text
+leakpinn/moc.py
+```
+
+Method-of-Characteristics solver used as the physics ground truth/reference for training-data generation and validation.
+
+```text
+leakpinn/synth.py
+```
+
+Synthetic sensor transient generation, sampling, noise and ADC quantisation.
+
+```text
+leakpinn/domain.py
+```
+
+Randomized pipe and anomaly scenario generation used by the generalized anomaly-classifier training data.
+
+### Training/export scripts
+
+```text
+scripts/02_forward_pinn.py
+```
+
+Trains and validates the single-pipe forward PINN.
+
+```text
+scripts/05_export_onnx.py
+```
+
+Exports the small 2-input forward PINN to ONNX and checks the exported graph.
+
+```text
+scripts/16_train_classifier.py
+```
+
+Generates 206-feature classifier data, trains the 6-output anomaly classifier and evaluates held-out performance.
+
+```text
+scripts/17_export_classifier_onnx.py
+```
+
+Exports the classifier with raw-feature input and the six-output contract.
+
+```text
+scripts/18_convert_classifier_tflite.py
+```
+
+Converts the classifier ONNX model to fp32 TFLite and verifies the result.
+
+### Deployment/reference documentation
+
+```text
+DEPLOYMENT.md
+```
+
+Exact single-pipe forward-model I/O contract, physical reconstruction formulas, fixed scenario constants and TFLM deployment notes.
+
+```text
+CONSTRICTION_DETECTION_PLAN.md
+```
+
+The none/leak/constriction design, 6-output classifier, constriction model semantics, validation and TFLite deployment notes.
+
+```text
+README.md
+```
+
+Repository-level description, model status, ranges, architecture and validation results.
+
+### Model artifacts
+
+```text
+results/05_pinn_forward_fp32.onnx
+results/05_tflite_model/<generated .tflite>
+results/anomaly_classifier_fp32.tflite
+```
+
+The first pair corresponds to the single-pipe 2-input forward model. The classifier artifact is the 206 -> 6 anomaly model used by this pipeline.
+
+---
+
+## 9. Files not required at runtime on the MCU
+
+The following are important for reproducing/training the models but are not needed by the board once the `.tflite` files are built:
+
+```text
+leakpinn/moc.py
+leakpinn/synth.py
+leakpinn/domain.py
+scripts/01_validate_moc.py
+scripts/02_forward_pinn.py
+scripts/14_validate_constriction.py
+scripts/15_validate_classify_localize.py
+scripts/16_train_classifier.py
+scripts/17_export_classifier_onnx.py
+scripts/18_convert_classifier_tflite.py
+```
+
+At inference time the MCU only needs the exported TFLite models plus embedded equivalents of the feature/preprocessing arithmetic.
+
+---
+
+## 10. Important model compatibility constraint
+
+The two models are not symmetric.
+
+The single-pipe forward model is a **fixed-scenario specialist**. The repository explicitly states that the deployed 2-input model is tied to the fixed pipe/event used for its export and must be retrained/re-exported for a different pipe or leak. Its physical reconstruction constants include the fixed pipe length, sensor/reference heads, wave speed and leak parameters.
+
+The anomaly classifier is instead trained over a distribution of none/leak/constriction cases. Therefore, if the classifier is retrained for a different pipe or a different Reynolds-number regime, the pressure-field model should be retrained/configured consistently with the same physical scenario assumptions.
+
+Do not combine an arbitrary classifier trained on one scenario distribution with an unrelated fixed single-pipe pressure model and interpret the result as a fully self-consistent physical estimate.
+
+---
+
+## 11. Important interpretation of the final map
+
+The final display is:
+
+\[
+\boxed{\text{PINN pressure field} + \text{anomaly annotation}}
+\]
+
+not:
+
+\[
+\boxed{\text{PINN pressure field re-solved using the classifier anomaly}}.
+\]
+
+For example, if the classifier says:
+
+```text
+LEAK
+xi = 0.42
+kappa_leak = ...
+```
+
+the current display pipeline places the leak marker at:
+
+\[
+x=0.42L
+\]
+
+and displays the leak severity. It does not recompute the pressure field with the estimated leak inserted into the forward PDE.
+
+If the desired product behavior is an anomaly-conditioned, physically updated pressure field, the forward model must expose anomaly parameters as runtime inputs (the repository's generalized forward model is the model designed around this idea for leaks).
+
+---
+
+## 12. Validation and limitations
+
+The repository reports that the fixed single-pipe forward PINN achieves approximately 0.4% flow error relative to its MOC reference case. The repository separately reports that the 206 -> 6 TFLite anomaly classifier has approximately 85.3% held-out classification accuracy and substantially larger localization error than the physics-search detector.
+
+The physics-search none/leak/constriction detector remains the repository's accuracy reference; the TFLite classifier exists as a low-latency embedded surrogate.
+
+The repository also notes that the actual models were not hardware-validated on the target board in the documented work, so MCU timing, memory and numerical behavior still need to be measured on the real hardware.
+
+---
+
+## 13. Minimal implementation contract
+
+### Classifier TFLite
+
+```text
+Input : float32[1][206]
+Output: float32[1][6]
+
+Output:
+0 p_none
+1 p_leak
+2 p_constriction
+3 xi_frac
+4 kappa_leak
+5 kappa_constriction
+```
+
+### Single-pipe forward TFLite
+
+```text
+Input : float32[1][2]
+        [xi, tau]
+
+Output: float32[1][2]
+        [h, q]
+```
+
+Then:
+
+```text
+H = Hss(xi) + Hs * h
+P = rho * g * H
+```
+
+and the heatmap is:
+
+```text
+P_grid[time_index][space_index]
+```
+
+---
+
+## 14. Recommended display resolution
+
+For an MCU display, start with:
+
+```text
+Nx = 32
+Nt = 16
+```
+
+which requires:
+
+\[
+32\times16=512
+\]
+
+forward-model invocations.
+
+If inference time and memory allow it, increase to:
+
+```text
+Nx = 64
+Nt = 24
+```
+
+for 1,536 points.
+
+The normalized grid is:
+
 ```python
-from leakpinn.synth import make_dataset
-from leakpinn.pinn import PINNConfig, fit, multistart_fit
-
-d = make_dataset(leak_x=37.3, CdA=3.6e-6, seed=0)
-cfg = PINNConfig(arch="ff")          # try "modmlp" or "char" (characteristic-coordinate Fourier features) too
-res = fit(d, cfg, verbose=True)      # or multistart_fit(d, cfg, n_starts=5) for several initial guesses
-print(res.est)                       # {'x_L': ..., 'CdA': ..., 'a': ...}
+xi  = linspace(0, 1, Nx)
+tau = linspace(0, tau_end, Nt, endpoint=False)
 ```
 
-## Architectures available (`PINNConfig.arch`)
+The physical axes, when required, are:
 
-- `"mlp"` — plain tanh MLP, no feature transform. Baseline; struggles with the sharp wave fronts.
-- `"ff"` — random Fourier features (Tancik et al. 2020) on (x, t). **Default**, best general-purpose
-  choice for the oscillatory wave field.
-- `"modmlp"` — Fourier features + the Wang-Teng-Perdikaris "modified MLP" gating, which usually
-  improves multi-scale PDE fits at some extra cost.
-- `"char"` — Fourier features on the **characteristic coordinates** `(t−x/a, t+x/a)`, along which
-  the lossless wave equation is exactly 1-D. In principle the best inductive bias for this
-  problem; not extensively tuned here — worth trying first if you continue this.
+\[
+x=\xi L
+\]
 
-I deliberately did **not** use a DeepONet: this problem has a fixed, known geometry and a single
-leak per training run, so there's no family of operators to amortise over — a DeepONet would add
-complexity without adding value here. (It would make sense if you wanted one network that
-generalises instantly across many different pipes/valve schedules without retraining.)
+and
 
-## Optimisers
+\[
+t=\frac{\tau L}{a_{nom}}.
+\]
 
-Training follows a staged schedule (configurable in `PINNConfig.schedule`):
-1. **Adam**, leak parameters frozen — warm up the network on the background wave field.
-2. **Adam**, leak parameters free, with `eps` (leak-source width) annealed from wide → physical —
-   gives the leak position a large basin of attraction before sharpening it.
-3. **L-BFGS** (`maxcor=60`, tight tolerances, strong-Wolfe line search) — standard second-stage
-   optimiser for PINNs once Adam is in the right basin; converges the residuals much further than
-   Adam alone.
+---
 
-I also wired up **NNCG** (Nyström-preconditioned Newton-CG, Rathore et al. 2024) as an optional
-third stage (`dict(opt="nncg", iters=...)` in the schedule) — a genuine second-order method for
-PINNs that can beat L-BFGS on hard residuals. I didn't end up needing it here once L-BFGS was
-converging the *forward* problem well, but it's there if the inverse fit needs it.
+## 15. Summary
 
-I did not reach for a plain Newton-Raphson root-find: this is a least-squares/loss-minimisation
-problem, not a root-finding one, and it's exactly what L-BFGS/NNCG are already designed for.
+The complete embedded system is:
 
-## Real-world validity of every number used
+```text
+                 TWO PRESSURE SENSORS
+                         |
+                         v
+              206 FEATURE PREPROCESSOR
+                         |
+                         v
+               +----------------------+
+               | 6-output classifier  |
+               +----------------------+
+                         |
+          +--------------+--------------+
+          |              |              |
+          v              v              v
+        NONE            LEAK       CONSTRICTION
+                         |
+                         | anomaly annotation
+                         |
+                         +-------------------+
+                                             |
+Normalized grid                           |
+(xi,tau)                                   |
+   |                                       |
+   v                                       |
+2-input forward PINN TFLite               |
+   |                                       |
+   v                                       |
+[h,q]                                      |
+   |                                       |
+   v                                       |
+H(xi,tau) -> P(xi,tau)                     |
+   |                                       |
+   +--------------------+------------------+
+                        |
+                        v
+              ANNOTATED PRESSURE MAP
+                        |
+                        v
+                     DISPLAY
+```
 
-- Pipe: DN50 Schedule 40 carbon steel (`D`=52.5 mm, wall 3.91 mm, per ASME B36.10).
-- Water at 20 °C: ρ=998.2 kg/m³, μ=1.002×10⁻³ Pa·s, bulk modulus K=2.18 GPa.
-- Wave speed from the standard Korteweg formula with thin-wall elasticity: **1388 m/s** (matches
-  published water-hammer references for steel pipe).
-- Friction factor from Swamee-Jain (explicit Colebrook approximation, <1% error, valid for our
-  Reynolds number ≈ 48,000).
-- Valve closure: 20% opening change in 20 ms — achievable with a fast pneumatic/servo valve;
-  produces an ≈11.4 m (1.1 bar) Joukowsky pulse, safely below the pipe's pressure rating.
-- Sensor model: 1 kHz sampling, 0.10 m (≈1 kPa) noise, 12-bit ADC over a 10 bar span — typical of
-  an industrial dynamic pressure transmitter.
-- Leak sizes tested: CdA = 0.9–3.6 mm² (roughly 1–5% of the design flow) — physically a small
-  puncture or corrosion pit, not a catastrophic rupture.
-
-None of these were picked to make the results look good; they came from datasheet-typical values
-and standard hydraulics references, and `scripts/01_validate_moc.py` checks the simulator
-reproduces the textbook closed-form results before anything downstream is trusted.
+The classifier determines **what anomaly to annotate, where to place it, and which severity value to display**. The 2-input PINN determines the **pressure/flow field background**. The two model outputs are deliberately kept separate and combined only at the presentation layer.
